@@ -76,5 +76,21 @@ check("command accepts codex", cmd("codex", {}) is None)
 check("command accepts aider --yes", cmd("aider --yes", {}) is None)
 check("command rejects a key", cmd("my-tool sk-ant-api03-abcdefghij1234", {}) is not None)
 
+# ---- review follow-ups: URL fragments and percent-encoding
+B64 = "Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZmdoaWo"
+check("base_url rejects a key followed by a #fragment",
+      base("https://api.example.com/v1?api_key=sk-abcdefghijkl#section", {}) is not None)
+check("base_url rejects a long token followed by a #fragment",
+      base("https://api.example.com/v1?token=" + B64 + "#section", {}) is not None)
+check("base_url rejects a token with %3D padding",
+      base("https://api.example.com/v1?token=" + B64 + "%3D", {}) is not None)
+check("base_url rejects a token with lowercase %3d padding",
+      base("https://api.example.com/v1?token=" + B64 + "%3d", {}) is not None)
+check("looks_secret sees through percent-encoding", h.looks_secret("x%3Dsk-ant-api03-abcdefghij1234"))
+check("base_url still allows ordinary percent-encoding and fragments",
+      base("https://example.com/a%20b/path?name=hello%20world#top", {}) is None)
+check("base_url still allows an Azure endpoint with a path",
+      base("https://my-resource.services.ai.azure.com/anthropic/v1/messages?api-version=2024-10-21", {}) is None)
+
 print("\nFAILED: %d" % fails)
 sys.exit(1 if fails else 0)

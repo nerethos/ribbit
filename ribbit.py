@@ -35,6 +35,7 @@ import textwrap
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import unquote
 
 try:
     import curses
@@ -140,7 +141,7 @@ def save_profiles(profiles):
 
 # ---------------------------------------------------------------- secret references
 
-SPLIT_TOKENS_RE = re.compile(r"[\s=:,;'\"/?&@]+")
+SPLIT_TOKENS_RE = re.compile(r"[\s=:,;'\"/?&@#]+")
 RAW_KEY_RE = re.compile(r"^sk-[A-Za-z0-9_-]{8,}$")
 LONG_TOKEN_RE = re.compile(r"^[A-Za-z0-9_+=-]{40,}$")
 
@@ -151,11 +152,14 @@ def looks_secret(text):
     Best effort only: flags sk-... style keys and long tokens that mix letters and
     digits. Long words with no digits (a hyphenated secret name, say) are not flagged.
     """
-    for tok in SPLIT_TOKENS_RE.split(text or ""):
-        if RAW_KEY_RE.match(tok):
-            return True
-        if LONG_TOKEN_RE.match(tok) and re.search(r"\d", tok) and re.search(r"[A-Za-z]", tok):
-            return True
+    text = text or ""
+    # Percent-encoded text is checked decoded too: base64 padding "=" is often sent as "%3D".
+    for candidate in ((text, unquote(text)) if "%" in text else (text,)):
+        for tok in SPLIT_TOKENS_RE.split(candidate):
+            if RAW_KEY_RE.match(tok):
+                return True
+            if LONG_TOKEN_RE.match(tok) and re.search(r"\d", tok) and re.search(r"[A-Za-z]", tok):
+                return True
     return False
 
 
