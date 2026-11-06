@@ -129,9 +129,11 @@ payload next to its usage snapshot. Useful if a bar or reset time looks wrong.
 ## Tests
 
 ```bash
-python3 tests/test_logic.py   # env building, key references, hook install, launching
-python3 tests/test_tui.py     # drives the curses UI through a pseudo-terminal (Unix)
+for t in tests/test_*.py; do python3 "$t" || break; done
 ```
+
+`tests/test_tui.py` drives the curses UI through a pseudo-terminal, so it needs Unix.
+GitHub Actions runs the same loop on Python 3.8, 3.10, 3.12 and 3.13.
 
 ## Licence
 
