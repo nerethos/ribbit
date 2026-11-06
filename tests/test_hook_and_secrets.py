@@ -63,8 +63,9 @@ check("hook failure: status line still printed", r.stdout.startswith("z"), r.std
 check("hook failure: note names the error type", "ribbit: usage not saved (" in r.stdout, r.stdout)
 check("hook failure: no traceback", "Traceback" not in r.stderr, r.stderr)
 logp = st_bad + "/ribbit/hook-errors.log"
-check("hook failure: error appended to the log", os.path.exists(logp) and "usage" not in "" and
-      len(open(logp).read().strip().splitlines()) == 1, os.path.exists(logp))
+log_lines = open(logp).read().strip().splitlines() if os.path.exists(logp) else []
+check("hook failure: one error line appended to the log",
+      len(log_lines) == 1 and "Error" in log_lines[0], log_lines)
 if POSIX:
     check("hook failure: log is private", mode(logp) == 0o600, oct(mode(logp)))
 
