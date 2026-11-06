@@ -35,6 +35,7 @@ import textwrap
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import unquote
 
 try:
     import curses
@@ -140,6 +141,33 @@ def save_profiles(profiles):
 
 # ---------------------------------------------------------------- secret references
 
+SPLIT_TOKENS_RE = re.compile(r"[\s=:,;'\"/?&@#]+")
+RAW_KEY_RE = re.compile(r"^sk-[A-Za-z0-9_-]{8,}$")
+LONG_TOKEN_RE = re.compile(r"^[A-Za-z0-9_+=-]{40,}$")
+
+
+def looks_secret(text):
+    """Heuristic for a pasted key inside a free-text field (cmd: refs, args, URLs).
+
+    Best effort only: flags sk-... style keys and long tokens that mix letters and
+    digits. Long words with no digits (a hyphenated secret name, say) are not flagged.
+    """
+    text = text or ""
+    # Percent-encoded text is checked decoded too: base64 padding "=" is often sent as "%3D".
+    for candidate in ((text, unquote(text)) if "%" in text else (text,)):
+        for tok in SPLIT_TOKENS_RE.split(candidate):
+            if RAW_KEY_RE.match(tok):
+                return True
+            if LONG_TOKEN_RE.match(tok) and re.search(r"\d", tok) and re.search(r"[A-Za-z]", tok):
+                return True
+    return False
+
+
+def url_has_userinfo(url):
+    """True for https://user:pass@host or https://token@host."""
+    return re.match(r"^https?://[^/?#]*@", url or "") is not None
+
+
 def check_ref(ref, required):
     """Return an error string, or None if ref is acceptable."""
     ref = ref.strip()
@@ -154,6 +182,9 @@ def check_ref(ref, required):
                 return "nothing after " + prefix
             if prefix == "env:" and not ENV_NAME_RE.match(rest):
                 return "env: takes a variable NAME (e.g. env:ANTHROPIC_API_KEY), not the key itself"
+            if prefix == "cmd:" and looks_secret(rest):
+                return ("the command contains what looks like a key. Keep the key in a password "
+                        "manager or an environment variable and reference that instead")
             return None
     return ("not stored: use env:NAME, cmd:<command>, file:<path> or prompt "
             "(raw keys are never written to the config)")
@@ -680,6 +711,8 @@ def fields_for(ptype, taken, editing):
     def v_url(v, vals):
         if v and not re.match(r"^https?://\S+$", v):
             return "must start with http:// or https://"
+        if v and (url_has_userinfo(v) or looks_secret(v)):
+            return "the URL must not contain credentials or keys"
 
     def v_resource(v, vals):
         if v and not re.match(r"^[A-Za-z0-9-]+$", v):
@@ -699,6 +732,12 @@ def fields_for(ptype, taken, editing):
     def v_cmd(v, vals):
         if not v:
             return "required"
+        if looks_secret(v):
+            return "the command looks like it contains a key; use the key reference field"
+
+    def v_args(v, vals):
+        if looks_secret(v):
+            return "the args look like they contain a key; use the key reference field instead"
 
     def v_env(v, vals):
         try:
@@ -749,7 +788,8 @@ def fields_for(ptype, taken, editing):
                   "help": "Sets OPENAI_BASE_URL, e.g. for Azure OpenAI or a gateway."})
         F.append({"key": "command", "prompt": "command", "validate": v_cmd,
                   "help": "The tool to run with OPENAI_API_KEY set, e.g. codex or aider."})
-        F.append({"key": "args", "prompt": "args (optional)", "help": "Arguments always passed to the command."})
+        F.append({"key": "args", "prompt": "args (optional)", "validate": v_args,
+                  "help": "Arguments always passed to the command."})
     F.append({"key": "extra_env", "prompt": "extra env (optional)", "validate": v_env,
               "help": "Non-secret KEY=VALUE pairs, space separated."})
     return F
