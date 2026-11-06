@@ -99,8 +99,10 @@ that child process:
 | `file:<path>` | read a file (keep it `chmod 600`) |
 | `prompt` | ask on the terminal at launch |
 
-Pasting a raw key into the form is rejected, masked on screen and not echoed
-back. `cmd:` references run whatever is in your own `profiles.json`, so keep
+Pasting a raw key into a key field is rejected, masked on screen and not echoed
+back. The command, args and URL fields are also checked for key-like text and
+URL credentials, but that is a best-effort filter, so don't put secrets in
+free-text fields. `cmd:` references run whatever is in your own `profiles.json`, so keep
 that file private (ribbit writes it `0600`).
 
 ## Where things live
