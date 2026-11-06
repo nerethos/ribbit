@@ -127,6 +127,36 @@ def load_profiles():
         return default_profiles(), "could not parse profiles.json (%s); copy kept at %s" % (e, bak)
 
 
+def add_profile(profiles, new):
+    if any(q["name"] == new["name"] for q in profiles):
+        raise ValueError("a profile named '%s' already exists (added elsewhere?)" % new["name"])
+    profiles.append(new)
+
+
+def replace_profile(profiles, new):
+    for i, q in enumerate(profiles):
+        if q["name"] == new["name"]:
+            profiles[i] = new
+            return
+    raise ValueError("profile '%s' no longer exists; it was removed elsewhere" % new["name"])
+
+
+def remove_profile(profiles, name):
+    profiles[:] = [q for q in profiles if q["name"] != name]
+
+
+def update_profiles(change):
+    """Re-read profiles.json, apply change(list) to the fresh copy and save it.
+
+    Applying each edit to what is on disk, rather than to this process's older copy, keeps
+    changes made by another running instance. change() may raise ValueError to abort.
+    """
+    profiles, _ = load_profiles()
+    change(profiles)
+    save_profiles(profiles)
+    return profiles
+
+
 def save_profiles(profiles):
     p = config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -760,7 +790,7 @@ def values_from_profile(p):
                                     "resource", "command", "args")}
     for k, val in (p.get("models") or {}).items():
         v["m_" + k] = val
-    v["extra_env"] = " ".join("%s=%s" % kv for kv in (p.get("extra_env") or {}).items())
+    v["extra_env"] = " ".join(shlex.quote("%s=%s" % kv) for kv in (p.get("extra_env") or {}).items())
     return v
 
 
@@ -878,8 +908,8 @@ def tui(stdscr):
                 names = {p["name"] for p in st["profiles"]}
                 if run_form(stdscr, "add %s profile" % TAGS[t], fields_for(t, names, False), vals):
                     try:
-                        st["profiles"].append(profile_from_values(t, vals))
-                        save_profiles(st["profiles"])
+                        newp = profile_from_values(t, vals)
+                        st["profiles"] = update_profiles(lambda ps: add_profile(ps, newp))
                         st["sel"] = len(st["profiles"]) - 1
                         say(st, "saved " + vals["name"], "green")
                     except (ValueError, OSError) as e:
@@ -889,18 +919,19 @@ def tui(stdscr):
             vals = values_from_profile(p)
             if run_form(stdscr, "edit " + p["name"], fields_for(p["type"], set(), True), vals):
                 try:
-                    st["profiles"][st["sel"]] = profile_from_values(p["type"], vals)
-                    save_profiles(st["profiles"])
+                    newp = profile_from_values(p["type"], vals)
+                    st["profiles"] = update_profiles(lambda ps: replace_profile(ps, newp))
+                    pos = [q["name"] for q in st["profiles"]].index(newp["name"])
+                    st["sel"] = pos
                     say(st, "saved " + p["name"], "green")
                 except (ValueError, OSError) as e:
                     say(st, "not saved: %s" % e, "red")
         elif ch == "d" and n:
             p = st["profiles"][st["sel"]]
             if confirm(stdscr, "Delete profile '%s'? (its config dir is left alone)" % p["name"]):
-                st["profiles"].pop(st["sel"])
-                st["sel"] = max(0, min(st["sel"], len(st["profiles"]) - 1))
                 try:
-                    save_profiles(st["profiles"])
+                    st["profiles"] = update_profiles(lambda ps: remove_profile(ps, p["name"]))
+                    st["sel"] = max(0, min(st["sel"], len(st["profiles"]) - 1))
                     say(st, "deleted " + p["name"], "green")
                 except OSError as e:
                     say(st, "not saved: %s" % e, "red")
