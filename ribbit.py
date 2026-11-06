@@ -108,6 +108,12 @@ def default_profiles():
     ]
 
 
+def valid_profile(p):
+    """Minimal shape check so the rest of the program can index name/type safely."""
+    return (isinstance(p, dict) and isinstance(p.get("name"), str) and NAME_RE.match(p["name"])
+            and p.get("type") in TYPES)
+
+
 def load_profiles():
     p = config_path()
     if not p.exists():
@@ -117,7 +123,23 @@ def load_profiles():
         profs = data.get("profiles", [])
         if not isinstance(profs, list):
             raise ValueError("profiles is not a list")
-        return profs, ""
+        good, seen = [], set()
+        for item in profs:
+            if valid_profile(item) and item["name"] not in seen:
+                seen.add(item["name"])
+                good.append(item)
+        skipped = len(profs) - len(good)
+        if not skipped:
+            return good, ""
+        bak = p.with_suffix(".json.bak")
+        kept = ""
+        try:
+            if not bak.exists():
+                shutil.copy(p, bak)
+            kept = "; original kept at %s" % bak
+        except Exception:
+            pass
+        return good, "skipped %d invalid or duplicate profile(s) in profiles.json%s" % (skipped, kept)
     except Exception as e:
         bak = p.with_suffix(".json.broken")
         try:
@@ -277,13 +299,18 @@ def launch(p, extra=()):
     secret = resolve_secret(p.get("key"), p["name"])
     if t != "openai":
         d = expand(p.get("config_dir") or "~/.claude-" + p["name"])
-        os.makedirs(d, mode=0o700, exist_ok=True)
+        try:
+            os.makedirs(d, mode=0o700, exist_ok=True)
+        except OSError as e:
+            raise ProfileError("cannot use config dir %s: %s" % (d, e.strerror or e))
     env = build_env(p, secret)
     # A no-op handler (not SIG_IGN, which children would inherit) so Ctrl-C reaches the
     # child tool without Python killing it.
     old = signal.signal(signal.SIGINT, lambda *a: None)
     try:
         return subprocess.call([exe] + argv[1:], env=env)
+    except OSError as e:
+        raise ProfileError("could not start '%s': %s" % (argv[0], e.strerror or e))
     finally:
         signal.signal(signal.SIGINT, old)
 
@@ -393,12 +420,15 @@ def install_hook(p):
             data = json.loads(sp.read_text())
         except Exception:
             return "settings.json is not valid JSON, left untouched"
+        if not isinstance(data, dict):
+            return "settings.json is not a JSON object, left untouched"
     want = {"type": "command", "command": hook_command()}
     cur = data.get("statusLine")
     if cur == want:
         return "usage hook already installed"
     if cur:
-        return "settings.json already has a statusLine (%s); not overwriting" % cur.get("command", "?")
+        shown = cur.get("command", "?") if isinstance(cur, dict) else str(cur)
+        return "settings.json already has a statusLine (%s); not overwriting" % str(shown)[:60]
     sp.parent.mkdir(parents=True, exist_ok=True)
     if sp.exists():
         bak = sp.with_name("settings.json.hub-backup")
@@ -831,7 +861,7 @@ def do_launch(stdscr, st):
         code = launch(p)
         if code:
             say(st, "%s exited with status %s" % (p["name"], code), "yellow")
-    except ProfileError as e:
+    except (ProfileError, OSError) as e:
         err = str(e)
     except KeyboardInterrupt:
         pass
@@ -931,13 +961,15 @@ def cli_run(argv):
         return 2
     try:
         return launch(prof, rest)
-    except ProfileError as e:
+    except (ProfileError, OSError) as e:
         print("x %s" % e, file=sys.stderr)
         return 1
 
 
 def cli_list():
-    profiles, _ = load_profiles()
+    profiles, note = load_profiles()
+    if note:
+        print(note, file=sys.stderr)
     now = time.time()
     for i, p in enumerate(profiles, 1):
         bits = []
