@@ -111,7 +111,7 @@ def default_profiles():
 def valid_profile(p):
     """Minimal shape check so the rest of the program can index name/type safely."""
     return (isinstance(p, dict) and isinstance(p.get("name"), str) and NAME_RE.match(p["name"])
-            and p.get("type") in TYPES)
+            and isinstance(p.get("type"), str) and p["type"] in TYPES)
 
 
 def load_profiles():
@@ -132,13 +132,21 @@ def load_profiles():
         if not skipped:
             return good, ""
         bak = p.with_suffix(".json.bak")
-        kept = ""
+        part = p.with_name(bak.name + ".tmp")
+        kept = "; original kept at %s" % bak
         try:
             if not bak.exists():
-                shutil.copy(p, bak)
-            kept = "; original kept at %s" % bak
-        except Exception:
-            pass
+                # Copy aside first and publish with a rename, so a failed copy never leaves a
+                # partial .bak that later loads would take for a good backup.
+                shutil.copy(p, part)
+                os.replace(part, bak)
+        except Exception as e:
+            kept = ("; WARNING: could not back up the original (%s), so the skipped entries "
+                    "are lost on the next save" % e)
+            try:
+                part.unlink()
+            except Exception:
+                pass
         return good, "skipped %d invalid or duplicate profile(s) in profiles.json%s" % (skipped, kept)
     except Exception as e:
         bak = p.with_suffix(".json.broken")
@@ -426,7 +434,7 @@ def install_hook(p):
     cur = data.get("statusLine")
     if cur == want:
         return "usage hook already installed"
-    if cur:
+    if cur is not None:   # any existing value, including [] "" 0 false and {}
         shown = cur.get("command", "?") if isinstance(cur, dict) else str(cur)
         return "settings.json already has a statusLine (%s); not overwriting" % str(shown)[:60]
     sp.parent.mkdir(parents=True, exist_ok=True)

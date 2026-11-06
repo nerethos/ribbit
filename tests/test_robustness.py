@@ -147,7 +147,7 @@ for raw, expect in (("[]", "not a JSON object"), ('"text"', "not a JSON object")
     check("install_hook %s: message" % raw, expect in m, m)
     check("install_hook %s: file untouched" % raw, sj.read_text() == raw)
 
-for sl in ('"echo hi"', "[1, 2]", "5", '{"type": "command"}'):
+for sl in ('"echo hi"', "[1, 2]", "5", '{"type": "command"}', "[]", '""', "0", "false", "{}"):
     sj.write_text('{"statusLine": %s}' % sl)
     before = sj.read_text()
     try:
@@ -163,6 +163,43 @@ for sl in ('"echo hi"', "[1, 2]", "5", '{"type": "command"}'):
 sj.unlink()
 check("install_hook: fresh install", "installed" in h.install_hook(prof))
 check("install_hook: idempotent", "already installed" in h.install_hook(prof))
+
+# ---- review follow-ups
+# a `type` that is not a string (and not hashable) skips only that entry
+if bak.exists():
+    bak.unlink()
+cfg.write_text(json.dumps({"profiles": [good, {"name": "l", "type": ["subscription"]},
+                                         {"name": "d", "type": {}}, {"name": "n", "type": None}]}))
+profs, note = h.load_profiles()
+check("load: non-string types skip only those entries", [q["name"] for q in profs] == ["good"],
+      ([q["name"] for q in profs], note))
+check("load: reports the 3 skipped", "skipped 3" in note, note)
+
+# a failed backup must not leave a partial .bak behind, and must be reported
+if bak.exists():
+    bak.unlink()
+cfg.write_text(json.dumps(mixed))
+part = cfg.with_name(bak.name + ".tmp")
+orig_copy = h.shutil.copy
+
+
+def failing_copy(src, dst, *a, **k):
+    open(str(dst), "w").write("partial")
+    raise OSError("disk full")
+
+
+h.shutil.copy = failing_copy
+try:
+    profs, note = h.load_profiles()
+finally:
+    h.shutil.copy = orig_copy
+check("backup failure: valid entries still load", [q["name"] for q in profs] == ["good", "second"], profs)
+check("backup failure: the note says so", "could not back up" in note and "disk full" in note, note)
+check("backup failure: no partial .bak published", not bak.exists())
+check("backup failure: temp file cleaned up", not part.exists())
+profs, note = h.load_profiles()
+check("backup is retried once the problem is gone", bak.exists() and json.loads(bak.read_text()) == mixed)
+check("retry reports the backup location", "original kept at" in note, note)
 
 shutil.rmtree(root, ignore_errors=True)
 print("\nFAILED: %d" % fails)
