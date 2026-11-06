@@ -28,6 +28,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -159,6 +160,26 @@ def check_ref(ref, required):
             "(raw keys are never written to the config)")
 
 
+def key_file_loose(path):
+    """Octal mode string if a key file is accessible by group or others (POSIX), else ''."""
+    if os.name == "nt":
+        return ""
+    try:
+        mode = stat.S_IMODE(os.stat(str(path)).st_mode)
+    except OSError:
+        return ""
+    return "%o" % mode if mode & 0o077 else ""
+
+
+def redact_first_line(text):
+    """First non-empty line of a command's stderr with long token-like words hidden."""
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if line:
+            return re.sub(r"\S{24,}", "<redacted>", line)[:120]
+    return ""
+
+
 def resolve_secret(ref, who):
     ref = (ref or "").strip()
     if not ref:
@@ -173,10 +194,16 @@ def resolve_secret(ref, who):
             raise ProfileError("environment variable %s is not set in the shell that started the hub" % rest)
         return val
     if kind == "file":
+        path = Path(expand(rest))
         try:
-            return Path(expand(rest)).read_text().strip()
+            val = path.read_text().strip()
         except OSError as e:
             raise ProfileError("cannot read key file: %s" % e)
+        loose = key_file_loose(path)
+        if loose:
+            print("  ribbit: warning: %s is accessible by other users (mode %s); run: chmod 600 %s"
+                  % (path, loose, shlex.quote(str(path))), file=sys.stderr)
+        return val
     if kind == "cmd":
         try:
             argv = shlex.split(rest, posix=(os.name != "nt"))
@@ -184,7 +211,8 @@ def resolve_secret(ref, who):
         except (OSError, subprocess.TimeoutExpired, ValueError) as e:
             raise ProfileError("key command failed: %s" % e)
         if r.returncode != 0:
-            raise ProfileError("key command exited %d: %s" % (r.returncode, r.stderr.strip()[:120]))
+            why = redact_first_line(r.stderr)
+            raise ProfileError("key command exited %d%s" % (r.returncode, ": " + why if why else ""))
         out = r.stdout.strip()
         if not out:
             raise ProfileError("key command printed nothing")
@@ -204,8 +232,12 @@ def key_status(ref):
         ok = bool(os.environ.get(rest))
         return ref + ("  set" if ok else "  NOT SET in this shell"), ("green" if ok else "red")
     if kind == "file":
-        ok = Path(expand(rest)).is_file()
-        return ref + ("  found" if ok else "  MISSING"), ("green" if ok else "red")
+        path = Path(expand(rest))
+        if not path.is_file():
+            return ref + "  MISSING", "red"
+        if key_file_loose(path):
+            return ref + "  found, but readable by others (chmod 600)", "yellow"
+        return ref + "  found", "green"
     return ref + "  (runs at launch)", "dim"
 
 
@@ -328,6 +360,39 @@ def fmt_dur(s):
     return "%dm" % m
 
 
+HOOK_LOG_KEEP = 8000
+
+
+def _write_private(path, text):
+    """Write text to path with mode 0600, tightening an existing looser file first."""
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            fd = None
+            f.write(text)
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def log_hook_error(err):
+    """Append one line to a small capped log next to the usage folder, if that is writable."""
+    try:
+        p = state_dir().parent / "hook-errors.log"
+        p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        old = ""
+        if p.exists():
+            old = p.read_text()
+            if len(old) > HOOK_LOG_KEEP:
+                old = old[-HOOK_LOG_KEEP:].split("\n", 1)[-1]
+        line = "%s %s: %s\n" % (datetime.now().isoformat(timespec="seconds"), type(err).__name__, err)
+        _write_private(p, old + line)
+    except Exception:
+        pass
+
+
 def cmd_hook():
     try:
         raw = sys.stdin.read()
@@ -336,17 +401,23 @@ def cmd_hook():
         data = {}
     acct = safe_name(os.environ.get("CLAUDE_ACCOUNT") or "default")
     rl = data.get("rate_limits") if isinstance(data, dict) else None
+    notes = []
     try:
         d = state_dir()
-        d.mkdir(parents=True, exist_ok=True)
+        d.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd, tmp = tempfile.mkstemp(dir=str(d), prefix="." + acct + ".", suffix=".tmp")
         with os.fdopen(fd, "w") as f:
             json.dump({"account": acct, "updated": time.time(), "rate_limits": rl}, f)
         os.replace(tmp, d / (acct + ".json"))
         if os.environ.get("RIBBIT_DEBUG"):
-            (d / (acct + ".raw.txt")).write_text(raw)
-    except Exception:
-        pass  # never break the statusline
+            try:
+                _write_private(d / (acct + ".raw.txt"), raw)
+            except Exception as e:
+                log_hook_error(e)
+                notes.append("ribbit: debug payload not saved (%s)" % type(e).__name__)
+    except Exception as e:  # the hook must never fail, but it should not fail silently either
+        log_hook_error(e)
+        notes.append("ribbit: usage not saved (%s)" % type(e).__name__)
     parts = [acct]
     if isinstance(rl, dict):
         for key, w in rl.items():
@@ -354,7 +425,7 @@ def cmd_hook():
                 parts.append("%s %d%%" % (label(key), int(w["used_percentage"])))
     else:
         parts.append("no subscription limits")
-    print(" | ".join(parts))
+    print(" | ".join(parts + notes))
     return 0
 
 

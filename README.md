@@ -86,6 +86,8 @@ Notes:
 - Foundry with no key uses the Azure default credential chain (`az login`).
 - Pin your Foundry deployment names. Unpinned model aliases can resolve to a
   model your account does not have.
+- A `file:` key that group or other users can read triggers a warning at launch
+  and a yellow flag in the list. Fix it with `chmod 600`.
 
 ## Keys are never stored
 
@@ -112,7 +114,12 @@ that file private (ribbit writes it `0600`).
 | per-profile Claude config | `~/.claude-<name>` by default | same |
 
 Set `RIBBIT_DEBUG=1` before launching a profile to also save the raw statusline
-payload next to its usage snapshot. Useful if a bar or reset time looks wrong.
+payload next to its usage snapshot (mode `0600`). Useful if a bar or reset time
+looks wrong.
+
+If the hook cannot save a snapshot it still exits 0, but adds
+`ribbit: usage not saved (<error type>)` to the status line and appends the error
+to `hook-errors.log` in the state folder when that is writable.
 
 ## Limitations
 
