@@ -277,13 +277,19 @@ def launch(p, extra=()):
     secret = resolve_secret(p.get("key"), p["name"])
     if t != "openai":
         d = expand(p.get("config_dir") or "~/.claude-" + p["name"])
-        os.makedirs(d, mode=0o700, exist_ok=True)
+        try:
+            os.makedirs(d, mode=0o700, exist_ok=True)
+        except OSError as e:
+            raise ProfileError("cannot create config dir %s: %s" % (d, e))
     env = build_env(p, secret)
     # A no-op handler (not SIG_IGN, which children would inherit) so Ctrl-C reaches the
     # child tool without Python killing it.
     old = signal.signal(signal.SIGINT, lambda *a: None)
     try:
-        return subprocess.call([exe] + argv[1:], env=env)
+        try:
+            return subprocess.call([exe] + argv[1:], env=env)
+        except OSError as e:
+            raise ProfileError("failed to start %s: %s" % (exe, e))
     finally:
         signal.signal(signal.SIGINT, old)
 
