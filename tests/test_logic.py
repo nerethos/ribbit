@@ -162,8 +162,11 @@ check("launch anthropic passes resolved key", "ANTHROPIC_API_KEY=real-anthropic-
 h.launch(dict(fy, key="", base_url=""))
 outtxt = open(root + "/out.txt").read()
 check("launch foundry no key => Entra", "CLAUDE_CODE_USE_FOUNDRY=1" in outtxt and "FOUNDRY_API_KEY" not in outtxt, outtxt)
+unusable_file = root + "/a_file"
+open(unusable_file, "w").write("not a dir")
 for bad, label in ((dict(api, key=""), "anthropic without key"), (dict(oa, command=""), "openai without command"),
-                   (dict(sub, command="no-such-tool-xyz"), "missing binary")):
+                   (dict(sub, command="no-such-tool-xyz"), "missing binary"),
+                   (dict(sub, config_dir=unusable_file + "/sub"), "unusable config dir")):
     try:
         h.launch(bad); ok = False
     except h.ProfileError:
